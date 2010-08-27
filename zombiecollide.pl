@@ -10,8 +10,7 @@ use SDLx::App;
 use SDLx::Controller::Object;
 use SDLx::Sprite::Animated;
 
-my $app = SDLx::App->new(w => 640, h => 480, fps => 60, title => 'Zombiecollide', color => 0x00CC00FF);
-$app->delay(1);
+my $app = SDLx::App->new(w => 640, h => 480, dt => 0.02, fps => 60, title => 'Zombiecollide', color => 0x00CC00FF);
 
 $app->draw_rect(undef, 0x00CC00FF);
 $app->update();
@@ -80,7 +79,18 @@ $obj->set_acceleration(
             $state->v_y(-$vel_y);
         }
 
-        my $collision = check_collision($state, \@collide_blocks);
+        my $c_rect = SDLx::Rect->new($state->x, $state->y, $w*2, $h*2);
+        $c_rect->centerx($state->x);
+        $c_rect->centery($state->y);
+        # gather blocks colliding a rectangular area twice as big as the player, and
+        # only check collision for those. checking every item in a big map eats up lots 
+        # of CPU time.
+        my @check_blocks;
+        foreach (@collide_blocks) {
+            next unless ($c_rect->colliderect($_->[4]->rect));
+            push(@check_blocks, $_);
+        }
+        my $collision = check_collision($state, \@check_blocks);
         $dashboard = 'Collision = ' . Dumper $collision;
 
         # x-axis collision check
@@ -165,7 +175,7 @@ $obj->set_acceleration(
 my $render_obj = sub {
     my $state = shift;
 
-#   my $c_rect = SDLx::Rect->new($state->x, $state->y, 16, 28);
+#    my $c_rect = SDLx::Rect->new($state->x, $state->y, $w*2, $h*2);
 #    $c_rect->centerx($state->x);
 #    $c_rect->centery($state->y);
 #    $app->draw_rect($c_rect, 0xFF00CCFF);
@@ -200,6 +210,8 @@ $app->add_show_handler(
         $app->draw_rect([ 0, 0, $app->w, $app->h ], 0x00CC00);
 #        $app->draw_rect($_, 0xFFFF0000) foreach @collide_blocks;
         foreach (@collide_blocks) {
+            next if ($_->[0] < 0 or $_->[0] > $app->w);
+            next if ($_->[1] < 0 or $_->[1] > $app->h);
             $_->[4]->rect->centerx($_->[0]);
             $_->[4]->rect->centery($_->[1]);
             $_->[4]->draw($app);
