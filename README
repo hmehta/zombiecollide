@@ -3,4 +3,5 @@ zombiecollide - simple SDL perl demo with a colliding zombie in a scrolling topd
 modified heavily from kthakore's scroller
 
 use wasd to mouse, mouse to focus :)
+left shift boosts speed
 esc exits

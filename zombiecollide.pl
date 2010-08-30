@@ -4,11 +4,12 @@ use SDL;
 use SDL::Rect;
 use SDL::Events;
 use Math::Trig;
-use Collision::2D ':all';
+use Collision::Util qw/check_collision_interval/;
 use Data::Dumper;
 use SDLx::App;
 use SDLx::Controller::Object;
 use SDLx::Sprite::Animated;
+use Block; # a wrapper class to fit SDLx::Controller::State into Collision::Util ;<
 
 my $app = SDLx::App->new(
     w     => 640,
@@ -35,12 +36,12 @@ my $vel_x     = 40;
 my $vel_y     = -40;
 my $quit      = 0;
 my $dashboard = '';
-my $w         = 30;
-my $h         = 30;
+my $w         = 25;
+my $h         = 25;
 my $scroller  = [0, 0];
 my $scroll_v  = 2;
 my $scroll_n  = 30;
-my $bounce    = 15;
+my $bounce    = 80;
 
 my $map = require("data/base.pl");
 
@@ -49,7 +50,7 @@ my $y = $h;
 for (split(/\n/, $map->[0])) {
     for (/(.)/g) {
         if ($map->[1]->{$_}) {
-            push(@collide_blocks, [$x, $y, $w, $h]);
+            push(@collide_blocks, [Block->new(x => $x, y => $y, w => $w, h => $h), SDLx::Sprite->new(image => 'data/wall.png')]);
         }
         $x += $w;
     }
@@ -58,20 +59,18 @@ for (split(/\n/, $map->[0])) {
 }
 
 foreach (@collide_blocks) {
-    $_->[4] = SDLx::Sprite->new(image => 'data/wall.png');
-    $_->[4]->rect->centerx($_->[0]);
-    $_->[4]->rect->centery($_->[1]);
+    $_->[1]->rect->centerx($_->[0]->x);
+    $_->[1]->rect->centery($_->[0]->y);
 }
 
 $obj->set_acceleration(
     sub {
-        my $time  = shift;
-        my $state = shift;
-        $state->v_x(0);    #Don't move by default
+        my ($time, $state) = @_;
+        $state->v_x(0);    # don't move by default
         $state->v_y(0); 
         my $ay = 0;
 
-        if ($pressed->{'right shift'}) {
+        if ($pressed->{'left shift'}) {
             $vel_x =  80;
             $vel_y = -80;
         } else {
@@ -92,66 +91,45 @@ $obj->set_acceleration(
             $state->v_y(-$vel_y);
         }
 
-        my $w_ratio = 3;
-        my $h_ratio = 3; # caine
-        if ($state->v_x > $state->v_y) {
-            $h_ratio = 1;
-        } else {
-            $w_ratio = 1;
-        }
-        my $c_rect = SDLx::Rect->new($state->x, $state->y, $w*3, $h*3);
+        my $c_rect = SDLx::Rect->new($state->x, $state->y, $w*1.5, $h*1.5);
         $c_rect->centerx($state->x);
         $c_rect->centery($state->y);
-        # gather blocks colliding a rectangular area twice/thrice as big as the
+        # gather blocks colliding a rectangular area a bit bigger as the
         # player, and only check collision for those. checking every item in a
         # big map eats up lots of CPU time.
         my @check_blocks;
         foreach (@collide_blocks) {
-            next unless ($c_rect->colliderect($_->[4]->rect));
+            next unless ($c_rect->colliderect($_->[1]->rect));
             push(@check_blocks, $_);
         }
-        my $collision = check_collision($state, \@check_blocks);
-        $dashboard = 'Collision = ' . Dumper $collision;
+        my $b = Block->new(x => $state->x, y => $state->y, w => $w, h => $h, v_x => $state->v_x*0.02, v_y => $state->v_y*0.02);
+        @check_blocks = map { $_->[0] } @check_blocks;
+        my @collisions = check_collision_interval($b, \@check_blocks, 1);
+#        print "collisions: ", Dumper @collisions, "\n" unless ($collisions[0]->[0] == -1);
 
-        my $next_x = $state->x;
-        my $next_y = $state->y;
+        foreach my $collision (@collisions) {
+            # x-axis collision check
+            if ($collision->[0] != -1 && $collision->[1]->[0] != 0) {
+                my $block = $check_blocks[$collision->[0]];
+                my $v_cur = $state->v_x;
+                if ($state->v_x > 0) {      # moving right
+                    $state->v_x(-$bounce) if ($collision->[1]->[0] == -1);
+                } elsif ($state->v_x < 0) { # moving left
+                    $state->v_x($bounce) if ($collision->[1]->[0] == 1);
+                }
+            }
 
-        # x-axis collision check
-        if ($collision != -1 && $collision->[0] eq 'x') {
-            my $block = $collision->[1];
-            $state->v_x(0);
-            if ($state->v_x > 0) {      # moving right
-                $next_x = $block->[0] - $block->[2]/2 - $bounce;
-            } elsif ($state->v_x < 0) { # moving left
-                $next_x = $block->[0] + $block->[2]/2 + $bounce;
-            } else {                    # stopped at collision area
-                if ($state->x > $block->[0]) {     # on the right side
-                    $next_x = $block->[0] + $block->[2]/2 + $bounce;
-                } elsif ($state->x < $block->[0]) { # on the left side
-                    $next_x = $block->[0] - $block->[2]/2 - $bounce;
+            # y-axis collision check (only collide on one axis!)
+            if ($collision->[0] != -1 && $collision->[1]->[1] != 0) {
+                my $block = $check_blocks[$collision->[0]];            
+                my $v_cur = $state->v_y;
+                if ($state->v_y < 0) {     #moving up
+                    $state->v_y($bounce) if ($collision->[1]->[1] == -1);                    
+                } elsif ($state->v_y > 0) { # moving down
+                    $state->v_y(-$bounce) if ($collision->[1]->[1] == 1);
                 }
             }
         }
-
-        # y-axis collision check
-        if ($collision != -1 && $collision->[0] eq 'y') {
-            $state->v_y(0);
-            my $block = $collision->[1];
-            if ($state->v_y < 0) {     #moving up
-                $next_y = $block->[1] + $block->[3]/2 + $bounce;
-            } elsif ($state->v_y > 0) { # moving down
-                $next_y = $block->[1] - $block->[3]/2 - $bounce;
-            } else {                     # stopped at collision area
-                if ($state->y < $block->[1]) {      # as above
-                    $next_y = $block->[1] - $block->[3]/2 - $bounce;
-                } elsif ($state->y > $block->[1]) { # so below
-                    $next_y = $block->[1] + $block->[3]/2 + $bounce;
-                }
-            }
-        }
-
-        $state->x($next_x);
-        $state->y($next_y);
 
         if ($pressed->{escape}) {
             $quit = 1;
@@ -177,8 +155,8 @@ $obj->set_acceleration(
             $state->x($state->x + $x);
             $state->y($state->y + $y);
 
-            $_->[0] += $x foreach (@collide_blocks);
-            $_->[1] += $y foreach (@collide_blocks);
+            $_->[0]->{x} = $_->[0]->x + $x foreach (@collide_blocks);
+            $_->[0]->{y} = $_->[0]->y + $y foreach (@collide_blocks);
 
         } else {
             if ($state->x > $app->w - 100) {
@@ -237,11 +215,9 @@ $app->add_show_handler(
     $app->draw_rect([ 0, 0, $app->w, $app->h ], 0x00CC00);
 #        $app->draw_rect($_, 0xFFFF0000) foreach @collide_blocks;
         foreach (@collide_blocks) {
-            next if ($_->[0] < 0 or $_->[0] > $app->w);
-            next if ($_->[1] < 0 or $_->[1] > $app->h);
-            $_->[4]->rect->centerx($_->[0]);
-            $_->[4]->rect->centery($_->[1]);
-            $_->[4]->draw($app);
+            $_->[1]->rect->centerx($_->[0]->x);
+            $_->[1]->rect->centery($_->[0]->y);
+            $_->[1]->draw($app);
         }
         SDL::GFX::Primitives::string_color(
             $app,
@@ -255,44 +231,3 @@ $app->add_show_handler(
 $app->add_object($obj, $render_obj);
 $app->add_show_handler(sub { $app->update(); });
 $app->run_test;
-
-sub check_collision_2 {
-    my ($obj, $blocks) = @_;
-
-    my $o_rect = SDLx::Rect->new($obj->x-$w/2, $obj->y-$h/2, $w, $h);
-    foreach (@$blocks) {
-        my $b_rect = $_->[4]->rect;
-        my $c = $b_rect->colliderect_axis($o_rect);
-        if ($c) {
-            return [$c, $_];
-        }
-    }
-    return -1;
-}
-
-sub check_collision {
-    my ($object, $blocks) = @_;
-
-    my @collisions = ();
-
-    foreach (@$blocks) {
-        my $hash = {
-            x  => $object->x + 2.5,
-            y  => $object->y + 2.5,
-            w  => $w - 5,
-            h  => $h - 5,
-            xv => $object->v_x * 0.02,
-            yv => $object->v_y * 0.02
-        };
-        my $rect  = hash2rect($hash);
-        my $bhash = { x => $_->[0], y => $_->[1], w => $_->[2], h => $_->[3] };
-        my $block = hash2rect($bhash);
-        my $c =
-          dynamic_collision($rect, $block, interval => 1, keep_order => 1);
-        if ($c) {
-            my $axis = $c->axis() || 'y';
-            return [ $axis, $_ ];
-        }
-    }
-    return -1;
-}
